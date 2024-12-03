@@ -1,0 +1,165 @@
+services:
+  db:
+    image: postgres
+    restart: always
+    environment:
+      PGUSER: postgres
+      POSTGRES_PASSWORD: example
+    command:
+      - 'postgres'
+      - '-c'
+      - 'wal_level=logical'
+    ports:
+      - 5432:5432
+    volumes:
+      - pg-kafka-cdc:/var/lib/postgresql/data
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 8000:8080
+  kafka1:
+    image: confluentinc/cp-kafka
+    container_name: kafka1
+    hostname: kafka1
+    restart: always
+    ports:
+      - '9092:9092'
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_LISTENERS: 'CONTROLLER://kafka1:29093,PLAINTEXT://kafka1:29092,PLAINTEXT_HOST://0.0.0.0:9092'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka1:29092,PLAINTEXT_HOST://localhost:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka1:29093'
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+  kafka-ui:
+    container_name: kafka-ui
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - 8080:8080
+    depends_on:
+      - kafka1
+      - connect
+    restart: always
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: 'kafka1:29092'
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://connect:8083
+      DYNAMIC_CONFIG_ENABLED: 'true'
+  connect:
+    image: quay.io/debezium/connect:latest
+    ports:
+      - 8083:8083
+    restart: always
+    depends_on:
+      - kafka1
+    environment:
+      - BOOTSTRAP_SERVERS=kafka1:29092
+      - GROUP_ID=1
+      - CONFIG_STORAGE_TOPIC=my_connect_configs
+      - OFFSET_STORAGE_TOPIC=my_connect_offsets
+      - STATUS_STORAGE_TOPIC=my_connect_statuses
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.2
+    container_name: elasticsearch
+    volumes:
+      - es-kafka-cdc:/usr/share/elasticsearch/data
+    ports:
+      - 127.0.0.1:9200:9200
+    environment:
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=password
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.license.self_generated.type=trial
+      - xpack.ml.use_auto_machine_memory_percent=true
+      - ES_JAVA_OPTS=-Xms128m -Xmx2g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'curl --output /dev/null --silent --head --fail -u elastic:password http://elasticsearch:9200'
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  kibana_settings:
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.2
+    container_name: kibana_settings
+    restart: 'no'
+    command: >
+      bash -c '
+        echo "Setup the kibana_system password";
+        until curl -s -u "elastic:password" -X POST http://elasticsearch:9200/_security/user/kibana_system/_password -d "{\"password\":\"'password'\"}" -H "Content-Type: application/json" | grep -q "^{}"; do sleep 5; done;
+      '
+  kibana:
+    depends_on:
+      kibana_settings:
+        condition: service_completed_successfully
+    image: docker.elastic.co/kibana/kibana:8.15.2
+    container_name: kibana-kafka-cdc
+    volumes:
+      - kibana-kafka-cdc:/usr/share/kibana/data
+    ports:
+      - 127.0.0.1:5601:5601
+    environment:
+      - SERVER_NAME=kibana
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=password
+      - ELASTICSEARCH_PUBLICBASEURL=http://localhost:9200
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "curl -s -I http://kibana:5601 | grep -q 'HTTP/1.1 302 Found'"
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+  user-created-consumer:
+    build:
+      context: .
+      args:
+        - CONSUMER_NAME=user-created
+        - KAFKA_URL=kafka1:29092
+        - KAFKA_GROUP_ID=user-created
+        - TOPIC_NAME=data.public.users
+        - ELASTIC_URL=http://elasticsearch:9200
+        - ELASTIC_API_KEY=MY_API_KEY
+        - INDEX_NAME=users
+    depends_on:
+      - kafka1
+      - elasticsearch
+    restart: always
+  user-updated-consumer:
+    build:
+      context: .
+      args:
+        - CONSUMER_NAME=user-updated
+        - KAFKA_URL=kafka1:29092
+        - KAFKA_GROUP_ID=user-updated
+        - TOPIC_NAME=data.public.users
+        - ELASTIC_URL=http://elasticsearch:9200
+        - ELASTIC_API_KEY=MY_API_KEY
+        - INDEX_NAME=users
+    depends_on:
+      - kafka1
+      - elasticsearch
+    restart: always
+volumes:
+  pg-kafka-cdc:
+  es-kafka-cdc:
+  kibana-kafka-cdc:

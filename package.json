@@ -1,0 +1,20 @@
+{
+  "name": "kafka-cdc-demo",
+  "version": "0.0.1",
+  "main": "user-created.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Adam Beeson",
+  "license": "ISC",
+  "description": "A simple demo application to demonstrate Kafka CDC",
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@confluentinc/kafka-javascript": "^0.5.2",
+    "@elastic/elasticsearch": "^8.16.2"
+  }
+}
